@@ -9,43 +9,73 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  apk:
     runs-on: ubuntu-24.04
 
     steps:
-      - name: Download repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Extract Android project
+      - name: Extract source
         run: |
-          unzip -q SC-Horses-Android.zip -d android-source
+          if [ -f SC-Horses-Android.zip ]; then
+            unzip -q SC-Horses-Android.zip -d android-source
+            echo "BUILD_DIR=android-source/SC-Horses-Android" >> "$GITHUB_ENV"
+          else
+            echo "BUILD_DIR=." >> "$GITHUB_ENV"
+          fi
 
-      - name: Set up Java
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Configure Android SDK
+      - name: Check Android SDK
         run: |
           test -f "$ANDROID_HOME/platforms/android-35/android.jar"
-          test -d "$ANDROID_HOME/build-tools/34.0.0"
-          echo "sdk.dir=$ANDROID_HOME" > android-source/SC-Horses-Android/local.properties
+          echo "sdk.dir=$ANDROID_HOME" > "$BUILD_DIR/local.properties"
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Build Android APK
+      - name: Verify data and API
         run: |
-          gradle --no-daemon --stacktrace \
-            -p android-source/SC-Horses-Android \
-            assembleDebug
+          python3 -m unittest discover -s "$BUILD_DIR/tests" -p 'test_*.py' -v
+          node "$BUILD_DIR/tests/test_frontend.cjs"
 
-      - name: Save APK
-        uses: actions/upload-artifact@v4
+      - name: Prepare retained signing key
+        env:
+          KEY_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEY_B64" ]; then
+            test -n "$STORE_PASS" && test -n "$KEY_ALIAS" && test -n "$KEY_PASS"
+            printf '%s' "$KEY_B64" | base64 --decode > "$RUNNER_TEMP/sc-release.jks"
+            chmod 600 "$RUNNER_TEMP/sc-release.jks"
+            echo "SC_KEYSTORE_FILE=$RUNNER_TEMP/sc-release.jks" >> "$GITHUB_ENV"
+            echo "BUILD_TASK=assembleRelease" >> "$GITHUB_ENV"
+          else
+            echo "BUILD_TASK=assembleDebug" >> "$GITHUB_ENV"
+            echo "::warning::No retained signing key configured. Debug APK is for testing; future debug builds may not update this installation."
+          fi
+
+      - name: Build APK
+        env:
+          SC_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          SC_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          SC_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          export SC_VERSION_CODE=$((20000 + GITHUB_RUN_NUMBER))
+          gradle --no-daemon -p "$BUILD_DIR" "$BUILD_TASK"
+
+      - uses: actions/upload-artifact@v4
         with:
           name: SC-Horses-APK
-          path: android-source/SC-Horses-Android/app/build/outputs/apk/debug/app-debug.apk
+          path: '**/app/build/outputs/apk/**/*.apk'
           if-no-files-found: error
+
+      - name: Remove temporary signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/sc-release.jks"
