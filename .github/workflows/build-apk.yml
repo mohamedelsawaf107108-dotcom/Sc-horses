@@ -13,30 +13,38 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Download repository
+        uses: actions/checkout@v4
 
-      - name: Extract project
-        run: unzip -q SC-Horses-Android.zip -d android-source
+      - name: Extract Android project
+        run: |
+          unzip -q SC-Horses-Android.zip -d android-source
 
-      - uses: actions/setup-java@v4
+      - name: Set up Java
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Check preinstalled Android SDK
+      - name: Configure Android SDK
         run: |
           test -f "$ANDROID_HOME/platforms/android-35/android.jar"
           test -d "$ANDROID_HOME/build-tools/34.0.0"
           echo "sdk.dir=$ANDROID_HOME" > android-source/SC-Horses-Android/local.properties
 
-      - uses: gradle/actions/setup-gradle@v4
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Build APK
-        run: gradle --no-daemon --stacktrace -p android-source/SC-Horses-Android assembleDebug
+      - name: Build Android APK
+        run: |
+          gradle --no-daemon --stacktrace \
+            -p android-source/SC-Horses-Android \
+            assembleDebug
 
-      - uses: actions/upload-artifact@v4
+      - name: Save APK for download
+        uses: actions/upload-artifact@v4
         with:
           name: SC-Horses-APK
           path: android-source/SC-Horses-Android/app/build/outputs/apk/debug/app-debug.apk
